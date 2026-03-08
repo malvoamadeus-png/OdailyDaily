@@ -38,10 +38,27 @@ function displayOperator(value: string | null): string {
   return v;
 }
 
+function startOfDayLocal(dateStr: string): Date {
+  const [y, m, d] = dateStr.split("-").map((x) => Number(x));
+  return new Date(y, (m || 1) - 1, d || 1, 0, 0, 0, 0);
+}
+
+function endOfDayLocal(dateStr: string): Date {
+  const [y, m, d] = dateStr.split("-").map((x) => Number(x));
+  return new Date(y, (m || 1) - 1, d || 1, 23, 59, 59, 999);
+}
+
 export default function Home() {
   const [rows, setRows] = useState<NewsRow[]>([]);
   const [status, setStatus] = useState<string>("未加载");
   const [loading, setLoading] = useState(false);
+  const [mediaFilter, setMediaFilter] = useState<string>("全部");
+  const [startDate, setStartDate] = useState<string>("");
+  const [endDate, setEndDate] = useState<string>("");
+  const [eventKeyword, setEventKeyword] = useState<string>("");
+  const [pageSize, setPageSize] = useState<number>(30);
+  const [currentPage, setCurrentPage] = useState<number>(1);
+  const [totalCount, setTotalCount] = useState<number>(0);
 
   const env = useMemo(() => {
     return {
@@ -108,11 +125,28 @@ export default function Home() {
     }
     setLoading(true);
     setStatus("加载中...");
-    const { data, error } = await supabase
+    const safePage = Math.max(1, currentPage);
+    const from = (safePage - 1) * pageSize;
+    const to = from + pageSize - 1;
+    let query = supabase
       .from("news")
-      .select("*")
+      .select("*", { count: "exact" })
       .order("published_at", { ascending: false })
-      .limit(500);
+      .range(from, to);
+    if (mediaFilter !== "全部") {
+      query = query.eq("media", mediaFilter);
+    }
+    if (startDate) {
+      query = query.gte("published_at", startOfDayLocal(startDate).toISOString());
+    }
+    if (endDate) {
+      query = query.lte("published_at", endOfDayLocal(endDate).toISOString());
+    }
+    const eventLike = eventKeyword.trim();
+    if (eventLike) {
+      query = query.ilike("event_id", `%${eventLike}%`);
+    }
+    const { data, error, count } = await query;
     if (error) {
       setStatus(`加载失败：${error.message}`);
       setRows([]);
@@ -120,20 +154,24 @@ export default function Home() {
       return;
     }
     setRows((data as NewsRow[]) ?? []);
+    setTotalCount(count ?? 0);
     setStatus(
-      `已加载 ${(data as NewsRow[])?.length ?? 0} 条 · ${new Date().toLocaleString()}`,
+      `已加载 ${(data as NewsRow[])?.length ?? 0} / ${count ?? 0} 条（第 ${safePage} 页，每页 ${pageSize} 条，媒体=${mediaFilter}，事件关键词=${eventLike || "无"}）· ${new Date().toLocaleString()}`,
     );
     setLoading(false);
-  }, [supabase]);
+  }, [currentPage, endDate, eventKeyword, mediaFilter, pageSize, startDate, supabase]);
 
   useEffect(() => {
-    load();
+    const timer = window.setTimeout(() => {
+      void load();
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, [load]);
 
   return (
     <div className="min-h-screen bg-white text-black">
       <div className="mx-auto max-w-[1400px] px-4 py-4">
-        <div className="flex items-center justify-between gap-4 border-2 border-black px-4 py-3">
+        <div className="flex items-center justify-between gap-4 rounded-xl border-2 border-black px-4 py-3">
           <div>
             <div className="text-[18px] font-bold leading-tight">
               快讯采集看板
@@ -145,7 +183,7 @@ export default function Home() {
               type="button"
               onClick={load}
               disabled={loading}
-              className="border-2 border-black bg-[rgb(175,237,137)] px-3 py-2 text-sm font-bold disabled:opacity-60"
+              className="rounded-md border-2 border-black bg-[rgb(175,237,137)] px-3 py-2 text-sm font-bold disabled:opacity-60"
             >
               刷新
             </button>
@@ -153,7 +191,7 @@ export default function Home() {
         </div>
 
         {!supabase && (
-          <div className="mt-3 border-2 border-black">
+          <div className="mt-3 rounded-xl border-2 border-black">
             <div className="border-b-2 border-black px-3 py-2 font-bold">
               配置
             </div>
@@ -164,7 +202,115 @@ export default function Home() {
           </div>
         )}
 
-        <div className="mt-3 overflow-auto border-2 border-black">
+        <div className="mt-3 overflow-auto rounded-xl border-2 border-black">
+          <div className="flex flex-wrap items-center gap-2 border-b-2 border-black px-2 py-2 text-sm">
+            <span>媒体</span>
+            <select
+              value={mediaFilter}
+              onChange={(e) => {
+                setMediaFilter(e.target.value);
+                setCurrentPage(1);
+              }}
+              className="rounded-md border-2 border-black px-2 py-1"
+            >
+              <option value="全部">全部</option>
+              <option value="星球">星球</option>
+              <option value="律动">律动</option>
+              <option value="金色">金色</option>
+            </select>
+            <span>发布时间</span>
+            <input
+              type="date"
+              value={startDate}
+              onChange={(e) => {
+                setStartDate(e.target.value);
+                setCurrentPage(1);
+              }}
+              className="rounded-md border-2 border-black px-2 py-1"
+            />
+            <span>到</span>
+            <input
+              type="date"
+              value={endDate}
+              onChange={(e) => {
+                setEndDate(e.target.value);
+                setCurrentPage(1);
+              }}
+              className="rounded-md border-2 border-black px-2 py-1"
+            />
+            <span>事件</span>
+            <input
+              type="text"
+              value={eventKeyword}
+              onChange={(e) => {
+                setEventKeyword(e.target.value);
+                setCurrentPage(1);
+              }}
+              placeholder="输入 event_id 关键词"
+              className="rounded-md border-2 border-black px-2 py-1"
+            />
+            <span>每页</span>
+            <select
+              value={pageSize}
+              onChange={(e) => {
+                setPageSize(Number(e.target.value) || 30);
+                setCurrentPage(1);
+              }}
+              className="rounded-md border-2 border-black px-2 py-1"
+            >
+              <option value={30}>30</option>
+              <option value={50}>50</option>
+              <option value={100}>100</option>
+              <option value={200}>200</option>
+            </select>
+            <button
+              type="button"
+              onClick={load}
+              disabled={loading}
+              className="rounded-md border-2 border-black bg-[rgb(175,237,137)] px-2 py-1 font-bold disabled:opacity-60"
+            >
+              应用筛选
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setMediaFilter("全部");
+                setStartDate("");
+                setEndDate("");
+                setEventKeyword("");
+                setPageSize(30);
+                setCurrentPage(1);
+              }}
+              className="rounded-md border-2 border-black bg-white px-2 py-1 font-bold"
+            >
+              重置
+            </button>
+            <span className="ml-2">页码</span>
+            <button
+              type="button"
+              onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+              disabled={loading || currentPage <= 1}
+              className="rounded-md border-2 border-black bg-white px-2 py-1 font-bold disabled:opacity-60"
+            >
+              上一页
+            </button>
+            <span className="font-mono text-xs">
+              {currentPage}/{Math.max(1, Math.ceil(totalCount / pageSize))}
+            </span>
+            <button
+              type="button"
+              onClick={() =>
+                setCurrentPage((p) => {
+                  const maxPage = Math.max(1, Math.ceil(totalCount / pageSize));
+                  return Math.min(maxPage, p + 1);
+                })
+              }
+              disabled={loading || currentPage >= Math.max(1, Math.ceil(totalCount / pageSize))}
+              className="rounded-md border-2 border-black bg-white px-2 py-1 font-bold disabled:opacity-60"
+            >
+              下一页
+            </button>
+          </div>
           <table className="min-w-[1100px] w-full border-collapse text-sm">
             <thead className="sticky top-0 bg-white">
               <tr className="border-b-2 border-black">
@@ -225,7 +371,7 @@ export default function Home() {
                   <td className="px-2 py-2 text-center">
                     <span
                       className={[
-                        "inline-block px-2 py-0.5 font-bold",
+                        "inline-block rounded-md px-2 py-0.5 font-bold",
                         r.is_pushed ? "bg-[rgb(175,237,137)]" : "bg-white",
                       ].join(" ")}
                     >
@@ -237,7 +383,7 @@ export default function Home() {
                       type="button"
                       onClick={() => toggleBoolField(r, "is_business")}
                       className={[
-                        "inline-block px-2 py-0.5 font-bold",
+                        "inline-block rounded-md px-2 py-0.5 font-bold",
                         "cursor-pointer",
                         r.is_business ? "bg-[rgb(175,237,137)]" : "bg-white",
                       ].join(" ")}
@@ -250,7 +396,7 @@ export default function Home() {
                       type="button"
                       onClick={() => toggleBoolField(r, "is_contribution")}
                       className={[
-                        "inline-block px-2 py-0.5 font-bold",
+                        "inline-block rounded-md px-2 py-0.5 font-bold",
                         "cursor-pointer",
                         r.is_contribution ? "bg-[rgb(175,237,137)]" : "bg-white",
                       ].join(" ")}

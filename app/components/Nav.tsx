@@ -12,6 +12,7 @@ export function Nav() {
   const items = [
     { href: "/", label: "全部快讯" },
     { href: "/star", label: "星球统计" },
+    { href: "/star/schedule", label: "星球值班日历" },
   ];
 
   return (
@@ -24,7 +25,7 @@ export function Nav() {
               key={it.href}
               href={it.href}
               className={clsx(
-                "border-2 border-black px-3 py-2 text-sm font-bold",
+                "rounded-md border-2 border-black px-3 py-2 text-sm font-bold",
                 active ? "bg-[rgb(175,237,137)]" : "bg-white",
               )}
             >
