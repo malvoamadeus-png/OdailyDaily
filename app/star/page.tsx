@@ -41,6 +41,23 @@ type OperatorShiftDetail = {
   cRate: number;
 };
 
+const WEEKDAY_ORDER: Record<string, number> = {
+  周一: 1,
+  周二: 2,
+  周三: 3,
+  周四: 4,
+  周五: 5,
+  周六: 6,
+  周日: 7,
+};
+
+const SHIFT_ORDER: Record<string, number> = {
+  早班: 1,
+  午班: 2,
+  晚班: 3,
+  其他: 9,
+};
+
 function normalizeFirstStatus(value: string | null): string {
   if (!value) return "";
   if (value === "仅一家") return value;
@@ -63,6 +80,21 @@ function ymdFromUtcDate(d: Date): string {
   return `${y}-${m}-${day}`;
 }
 
+function rateBar(rate: number) {
+  const percent = Math.max(0, Math.min(100, Math.round(rate * 10000) / 100));
+  return (
+    <div className="relative h-6 min-w-[120px] overflow-hidden rounded-md border border-black/30 bg-black/5">
+      <div
+        className="absolute left-0 top-0 h-full bg-[rgb(175,237,137)]"
+        style={{ width: `${percent}%` }}
+      />
+      <div className="relative px-2 text-right font-mono leading-6">
+        {percent.toFixed(2)}%
+      </div>
+    </div>
+  );
+}
+
 export default function StarAnalyticsPage() {
   const [status, setStatus] = useState("未加载");
   const [loading, setLoading] = useState(false);
@@ -76,6 +108,7 @@ export default function StarAnalyticsPage() {
   });
   const [operatorStats, setOperatorStats] = useState<OperatorStat[]>([]);
   const [operatorShiftDetails, setOperatorShiftDetails] = useState<OperatorShiftDetail[]>([]);
+  const [expandedByOperator, setExpandedByOperator] = useState<Record<string, boolean>>({});
 
   const env = useMemo(() => {
     return {
@@ -96,6 +129,7 @@ export default function StarAnalyticsPage() {
       setStatus("缺少 NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY");
       setOperatorStats([]);
       setOperatorShiftDetails([]);
+      setExpandedByOperator({});
       setSummary({ aFirst: 0, bTotal: 0, cRate: 0 });
       return;
     }
@@ -220,10 +254,20 @@ export default function StarAnalyticsPage() {
         ...x,
         cRate: x.bTotal > 0 ? x.aFirst / x.bTotal : 0,
       }))
-      .sort((x, y) => y.bTotal - x.bTotal || x.operator.localeCompare(y.operator));
+      .sort((x, y) => {
+        if (x.operator !== y.operator) return x.operator.localeCompare(y.operator);
+        const w1 = WEEKDAY_ORDER[x.weekday] ?? 99;
+        const w2 = WEEKDAY_ORDER[y.weekday] ?? 99;
+        if (w1 !== w2) return w1 - w2;
+        const s1 = SHIFT_ORDER[x.shiftLabel] ?? 99;
+        const s2 = SHIFT_ORDER[y.shiftLabel] ?? 99;
+        if (s1 !== s2) return s1 - s2;
+        return y.bTotal - x.bTotal;
+      });
 
     setOperatorStats(operatorOut);
     setOperatorShiftDetails(detailOut);
+    setExpandedByOperator({});
     setSummary({
       aFirst: totalA,
       bTotal: totalB,
@@ -234,6 +278,16 @@ export default function StarAnalyticsPage() {
     );
     setLoading(false);
   }, [baseDate, granularity, operatorFilter, supabase]);
+
+  const detailsByOperator = useMemo(() => {
+    const m = new Map<string, OperatorShiftDetail[]>();
+    for (const row of operatorShiftDetails) {
+      const arr = m.get(row.operator) ?? [];
+      arr.push(row);
+      m.set(row.operator, arr);
+    }
+    return m;
+  }, [operatorShiftDetails]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -327,19 +381,17 @@ export default function StarAnalyticsPage() {
             </div>
             <div className="flex items-center justify-between rounded-lg border-2 border-black px-3 py-2">
               <div>首发率C</div>
-              <div className="font-mono font-bold">
-                {(summary.cRate * 100).toFixed(2)}%
-              </div>
+              <div>{rateBar(summary.cRate)}</div>
             </div>
           </div>
         </div>
 
         <div className="mt-3 overflow-auto rounded-xl border-2 border-black">
-          <table className="min-w-[900px] w-full border-collapse text-sm">
+          <table className="min-w-[980px] w-full border-collapse text-sm">
             <thead className="sticky top-0 bg-white">
               <tr className="border-b-2 border-black">
                 <th className="border-r-2 border-black px-2 py-2 text-left">
-                  人
+                  人 / 明细
                 </th>
                 <th className="border-r-2 border-black px-2 py-2 text-right">
                   首发快讯数量A
@@ -351,22 +403,59 @@ export default function StarAnalyticsPage() {
               </tr>
             </thead>
             <tbody>
-              {operatorStats.map((s) => (
-                <tr key={s.operator} className="border-t border-black/20">
-                  <td className="border-r-2 border-black px-2 py-2">
-                    {s.operator}
-                  </td>
-                  <td className="border-r-2 border-black px-2 py-2 text-right font-mono">
-                    {s.aFirst}
-                  </td>
-                  <td className="border-r-2 border-black px-2 py-2 text-right font-mono">
-                    {s.bTotal}
-                  </td>
-                  <td className="px-2 py-2 text-right font-mono">
-                    {(s.cRate * 100).toFixed(2)}%
-                  </td>
-                </tr>
-              ))}
+              {operatorStats.map((s) => {
+                const details = detailsByOperator.get(s.operator) ?? [];
+                const expanded = !!expandedByOperator[s.operator];
+                const canExpand = details.length > 0;
+                return (
+                  <>
+                    <tr key={s.operator} className="border-t border-black/20">
+                      <td className="border-r-2 border-black px-2 py-2">
+                        <div className="flex items-center gap-2">
+                          {canExpand && (
+                            <button
+                              type="button"
+                              className="h-6 w-6 rounded-md border border-black/40 text-xs"
+                              onClick={() =>
+                                setExpandedByOperator((prev) => ({
+                                  ...prev,
+                                  [s.operator]: !prev[s.operator],
+                                }))
+                              }
+                            >
+                              {expanded ? "▾" : "▸"}
+                            </button>
+                          )}
+                          {!canExpand && <span className="inline-block w-6" />}
+                          <span>{s.operator}</span>
+                        </div>
+                      </td>
+                      <td className="border-r-2 border-black px-2 py-2 text-right font-mono">
+                        {s.aFirst}
+                      </td>
+                      <td className="border-r-2 border-black px-2 py-2 text-right font-mono">
+                        {s.bTotal}
+                      </td>
+                      <td className="px-2 py-2">{rateBar(s.cRate)}</td>
+                    </tr>
+                    {expanded &&
+                      details.map((x) => (
+                        <tr key={x.shiftKey} className="border-t border-black/10 bg-black/[0.03]">
+                          <td className="border-r-2 border-black px-2 py-2 pl-10 text-black/85">
+                            {x.weekday} · {x.shiftLabel}
+                          </td>
+                          <td className="border-r-2 border-black px-2 py-2 text-right font-mono">
+                            {x.aFirst}
+                          </td>
+                          <td className="border-r-2 border-black px-2 py-2 text-right font-mono">
+                            {x.bTotal}
+                          </td>
+                          <td className="px-2 py-2">{rateBar(x.cRate)}</td>
+                        </tr>
+                      ))}
+                  </>
+                );
+              })}
               {operatorStats.length === 0 && (
                 <tr>
                   <td colSpan={4} className="px-3 py-6 text-center text-black/60">
@@ -377,42 +466,6 @@ export default function StarAnalyticsPage() {
             </tbody>
           </table>
         </div>
-
-        {granularity !== "day" && (
-          <div className="mt-3 overflow-auto rounded-xl border-2 border-black">
-            <table className="min-w-[1000px] w-full border-collapse text-sm">
-              <thead className="sticky top-0 bg-white">
-                <tr className="border-b-2 border-black">
-                  <th className="border-r-2 border-black px-2 py-2 text-left">人</th>
-                  <th className="border-r-2 border-black px-2 py-2 text-left">班次</th>
-                  <th className="border-r-2 border-black px-2 py-2 text-left">周几</th>
-                  <th className="border-r-2 border-black px-2 py-2 text-right">首发快讯数量A</th>
-                  <th className="border-r-2 border-black px-2 py-2 text-right">总发布数量B</th>
-                  <th className="px-2 py-2 text-right">首发率C</th>
-                </tr>
-              </thead>
-              <tbody>
-                {operatorShiftDetails.map((x) => (
-                  <tr key={x.shiftKey} className="border-t border-black/20">
-                    <td className="border-r-2 border-black px-2 py-2">{x.operator}</td>
-                    <td className="border-r-2 border-black px-2 py-2">{x.shiftLabel}</td>
-                    <td className="border-r-2 border-black px-2 py-2">{x.weekday}</td>
-                    <td className="border-r-2 border-black px-2 py-2 text-right font-mono">{x.aFirst}</td>
-                    <td className="border-r-2 border-black px-2 py-2 text-right font-mono">{x.bTotal}</td>
-                    <td className="px-2 py-2 text-right font-mono">{(x.cRate * 100).toFixed(2)}%</td>
-                  </tr>
-                ))}
-                {operatorShiftDetails.length === 0 && (
-                  <tr>
-                    <td colSpan={6} className="px-3 py-6 text-center text-black/60">
-                      暂无明细数据
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        )}
       </div>
     </div>
   );
